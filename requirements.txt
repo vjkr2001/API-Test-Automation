@@ -18,5 +18,5 @@ black>=23.3.0         # Code formatter
 isort>=5.12.0         # Import sorter
 flake8>=6.0.0         # Linting
 bandit>=1.7.5         # Security linting
-pre-commit>=3.3.0     # Pre-commit hooks
+pre-commit>=4.6.2     # Pre-commit hooks
 safety>=2.3.0         # Security vulnerability scanner
