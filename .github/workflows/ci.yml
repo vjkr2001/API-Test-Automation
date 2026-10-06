@@ -159,7 +159,7 @@ jobs:
     
     - name: Upload test reports
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: test-reports-${{ matrix.python-version }}
         path: |
@@ -196,7 +196,7 @@ jobs:
         safety check --output json --save-json safety-report.json || echo "::warning::Safety check found issues"
     
     - name: Upload security reports
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: security-reports
         path: |
@@ -227,7 +227,7 @@ jobs:
         python -m pytest tests/ -m performance -v --tb=short
     
     - name: Upload performance results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: performance-results
         path: reports/
