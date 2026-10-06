@@ -8,7 +8,7 @@ allure-pytest>=2.13.0   # Allure integration for pytest (test reporting)
 pytest>=7.4.0          # Python testing framework
 requests>=2.31.0       # HTTP library for API calls
 PyYAML>=6.0           # YAML parsing for configuration files
-jsonschema>=4.19.0    # JSON Schema validation
+jsonschema>=4.26.0    # JSON Schema validation
 
 # Development and CI dependencies
 pytest-cov>=4.1.0     # Coverage reporting for pytest
