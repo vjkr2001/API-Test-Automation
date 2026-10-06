@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment folders
+.venv/
+venv/
+
+# Pytest cache directory
+.pytest_cache/
+
+# Test reports and coverage data
+reports/
+allure-results/
+allure-report/
+htmlcov/
+coverage.xml
+*.coverage
+
+# Allure installation archives
+allure-*.tgz
+allure-*.tar.gz
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

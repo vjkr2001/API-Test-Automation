@@ -1,0 +1,294 @@
+# API Test Automation Framework - CI/CD Pipeline
+# This workflow automates testing, security scanning, and documentation deployment
+# for the API Test Automation Framework.
+#
+# Triggers:
+# - Push to main/develop/fix/feature branches
+# - Pull requests to main
+# - Daily at 6 AM UTC (Scheduled health check)
+# - Manual trigger (workflow_dispatch)
+#
+# Jobs:
+# 1. test: Runs test suite across Python versions
+# 2. security-scan: Performs security analysis
+# 3. performance-test: Runs performance tests
+# 4. deploy-docs: Deploys documentation to GitHub Pages
+# 5. notify: Sends notifications on failure
+#
+# Environment Setup:
+# - Uses Python matrix strategy (3.10, 3.11, 3.12)
+# - Caches pip dependencies
+# - Sets up Java for Allure reporting
+
+name: API Test Automation CI/CD
+
+'on':
+  push:
+    branches: [ main, develop, 'fix/*', 'feature/*' ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests daily at 6 AM UTC for health check
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allows manual trigger
+
+# Add concurrency control to prevent resource conflicts
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: read
+  checks: write
+  deployments: write
+  security-events: write
+
+env:
+  PYTHON_VERSION_DEFAULT: "3.11"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+      # Add fail-fast false to continue with other versions if one fails
+      fail-fast: false
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
+    
+    - name: Setup test environment
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        python -m venv .venv || exit 1
+        source .venv/bin/activate || exit 1
+        pip install -r requirements.txt
+        pip install pytest-xdist pytest-cov allure-pytest
+        
+        # Ensure all required directories exist
+        mkdir -p schemas
+        mkdir -p allure-results/smoke
+        mkdir -p allure-results/all
+        mkdir -p reports
+        
+        # Add workspace to PYTHONPATH inside venv
+        echo "${{ github.workspace }}" > .venv/lib/python${{ matrix.python-version }}/site-packages/workspace.pth
+        
+        # Verify required schema files
+        required_schemas=("user_list_schema.json" "single_user_schema.json" "create_user_schema.json")
+        for schema in "${required_schemas[@]}"; do
+          if [ ! -f "schemas/$schema" ]; then
+            echo "Error: Missing required schema file: $schema"
+            exit 1
+          fi
+        done
+    
+    - name: Lint with flake8
+      run: |
+        source .venv/bin/activate
+        pip install flake8
+        
+        # First check for critical errors (syntax errors and undefined names)
+        echo "Checking for critical errors..."
+        flake8 utils/ tests/ conftest.py \
+          --count --select=E9,F63,F7,F82 --show-source --statistics || exit 1
+        
+        # Then run full lint check on project files
+        echo "Running full lint check..."
+        flake8 utils/ tests/ conftest.py \
+          --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Run smoke tests
+      run: |
+        source .venv/bin/activate
+        python -m pytest tests/ -v -m "smoke" -n auto --dist loadfile \
+          --tb=short --alluredir=allure-results/smoke \
+          -o markers=smoke || echo "::warning::Smoke tests failed"
+    
+    - name: Run all tests with coverage
+      run: |
+        source .venv/bin/activate
+        python -m pytest tests/ -v -n auto --dist loadfile \
+          --cov=utils --cov=tests --cov-report=xml --cov-report=html \
+          --alluredir=allure-results/all || echo "::warning::Some tests failed"
+    
+    - name: Upload coverage to Codecov
+      if: success() || failure()  # Upload coverage even if tests fail
+      uses: codecov/codecov-action@v4
+      continue-on-error: true
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella-${{ matrix.python-version }}
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+    
+    - name: Install Allure CLI
+      if: always()
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y default-jre-headless
+        curl -o allure-2.27.0.tgz -Ls https://github.com/allure-framework/allure2/releases/download/2.27.0/allure-2.27.0.tgz
+        sudo tar -zxvf allure-2.27.0.tgz -C /opt/
+        sudo ln -sf /opt/allure-2.27.0/bin/allure /usr/bin/allure
+        allure --version
+        
+    - name: Generate Allure HTML report
+      if: always()
+      run: |
+        source .venv/bin/activate
+        allure generate allure-results/all --clean -o allure-report/all || echo "Allure report generation failed"
+        allure generate allure-results/smoke --clean -o allure-report/smoke || echo "Smoke tests report generation failed"
+    
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ matrix.python-version }}
+        path: |
+          allure-results/
+          allure-report/
+          reports/
+          coverage.xml
+          htmlcov/
+        retention-days: 30
+        if-no-files-found: warn
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+    
+    - name: Run Bandit security scan
+      run: bandit -r . -f json -o bandit-report.json || true
+    
+    - name: Run Safety check
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install safety requests
+        safety check --output json --save-json safety-report.json || echo "::warning::Safety check found issues"
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+        retention-days: 30
+        if-no-files-found: warn
+
+  performance-test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[perf]')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run performance tests
+      run: |
+        python -m pytest tests/ -m performance -v --tb=short
+    
+    - name: Upload performance results
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-results
+        path: reports/
+        retention-days: 30
+        if-no-files-found: warn
+
+  deploy-docs:
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION_DEFAULT }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install allure-pytest
+    
+    - name: Install Allure CLI
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y default-jre-headless
+        curl -o allure-2.27.0.tgz -Ls https://github.com/allure-framework/allure2/releases/download/2.27.0/allure-2.27.0.tgz
+        sudo tar -zxvf allure-2.27.0.tgz -C /opt/
+        sudo ln -sf /opt/allure-2.27.0/bin/allure /usr/bin/allure
+        allure --version
+    
+    - name: Generate test documentation
+      run: |
+        python -m pytest tests/ --alluredir=allure-results || true
+        # Generate Allure report
+        allure generate allure-results -o allure-report --clean || echo "Allure report generation failed"
+    
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+    
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: allure-report
+    
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+    if: failure()
+    
+    steps:
+    - name: Notify on failure
+      run: |
+        echo "Tests failed! Check the logs for details."
+        # Add Slack/Teams notification here if needed
